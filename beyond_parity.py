@@ -452,7 +452,8 @@ def main_loop():
             if not c:
                 current_status[i] = None
                 continue
-            if previous_status:
+            if (previous_status and previous_status[i] is not None
+                    and current_status[i] is not None):
                 differences = current_status[i] ^ previous_status[i]
                 on_flags = current_status[i] & differences
                 off_flags = (current_status[i] ^ 0xFFFFFFFF) & differences
