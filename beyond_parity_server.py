@@ -149,10 +149,11 @@ def main_loop():
                 client_send(reply, sender)
             else:
                 if member_name in session_changes[session_name]:
-                    session_inventory = dict(item_ledger[session_name])
-                    for key in list(session_inventory.keys()):
-                        if session_inventory[key] <= 0:
-                            del(session_inventory[key])
+                    my_ledger = item_ledger[session_name]
+                    session_inventory = {}
+                    for key in my_ledger:
+                        if my_ledger[key] > 0:
+                            session_inventory[key] = my_ledger[key]
                     reply = 'SYNC {0}'.format(json.dumps(session_inventory))
                     client_send(reply, sender)
                     session_changes[session_name].remove(member_name)
@@ -181,6 +182,10 @@ if __name__ == '__main__':
         for m in members:
             session_name = members[m]
             session_changes[session_name].add(m)
+
+        for key in item_ledger:
+            il = item_ledger[key]
+            item_ledger[key] = convert_dict_keys_to_int(il)
 
     while True:
         now = time()
