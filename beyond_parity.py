@@ -11,6 +11,8 @@ backoff_sync_interval = SYNC_INTERVAL
 PAUSE_DELAY_INTERVAL = 0.05
 SIMILARITY_THRESHOLD = 0.95
 SERIES_NUMBER = int(round(time()))
+MINIMUM_PLAYED_TIME = 600
+MIN_SANE_INVENTORY = 7
 
 FIELD_ITEM_ADDRESS = 0x7e1869
 BATTLE_ITEM_ADDRESS = 0x7e2686
@@ -275,6 +277,16 @@ def send_change_queue():
             break
 
 
+def check_inventory_size(inventory):
+    count = 0
+    for (item, amount) in inventory.items():
+        if item == 0xFF:
+            continue
+        if 1 <= amount <= 99:
+            count += 1
+    return count
+
+
 def main_loop():
     global message_index, change_queue
     global previous_inventory, previous_played_time
@@ -291,6 +303,8 @@ def main_loop():
     try:
         # read RAM data from retroarch
         played_time = get_played_time()
+        if played_time < MINIMUM_PLAYED_TIME:
+            previous_played_time = 999999999
         field_raw = get_field_items_raw()
         battle_raw = get_battle_items_raw()
         field_items = get_field_items(field_raw)
@@ -308,6 +322,12 @@ def main_loop():
         in_battle = False
         current_order, current_inventory = items_to_dict(field_items)
         raw_data = field_raw
+
+    # sanity check to prevent inventory wipe on re-load
+    if (previous_inventory is not None and current_inventory is not None
+            and check_inventory_size(previous_inventory) >= MIN_SANE_INVENTORY
+            and check_inventory_size(current_inventory) <= 0):
+        previous_played_time = 999999999
 
     # sync field to battle inventory to always stay above threshold
     if in_battle and similarity < 1.0:
@@ -338,8 +358,6 @@ def main_loop():
         backoff_sync_interval = SYNC_INTERVAL
         if directive == 'SYNC':
             synced_inventory = directive_parameters
-            if previous_played_time > played_time:
-                previous_played_time = played_time
             for item in range(0x100):
                 if item not in synced_inventory:
                     synced_inventory[item] = 0
@@ -370,6 +388,8 @@ def main_loop():
             if write_inventory(current_order, synced_inventory,
                                raw_data, in_battle=in_battle):
                 previous_inventory = synced_inventory
+                if previous_played_time > played_time:
+                    previous_played_time = played_time
         except socket.timeout:
             pass
 
