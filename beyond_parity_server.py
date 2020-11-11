@@ -2,14 +2,16 @@ import gzip
 import json
 import socket
 from collections import defaultdict
+from datetime import datetime
+from os import listdir
 from sys import exc_info
 from time import time, sleep
 
 POLL_INTERVAL = 0.5
 SERVER_IP = '10.0.0.111'
 SERVER_PORT = 55333
-LOG_RETENTION_DURATION = 600
-BACKUP_INTERVAL = 900
+LOG_RETENTION_DURATION = 599
+BACKUP_INTERVAL = 899
 
 server_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 server_socket.bind((SERVER_IP, SERVER_PORT))
@@ -48,15 +50,9 @@ def client_send(msg, client):
 
 def client_receive():
     msg, client = server_socket.recvfrom(4096)
-    if msg[0] == '!':
+    if msg[0] == ord('!'):
         msg = gzip.decompress(msg[1:])
-
-    try:
-        msg = msg.decode('ascii').strip()
-    except UnicodeDecodeError:
-        print(msg)
-        raise UnicodeDecodeError(msg)
-
+    msg = msg.decode('ascii').strip()
     return msg, client
 
 
@@ -173,6 +169,19 @@ def main_loop():
 
 if __name__ == '__main__':
     previous_network_time = 0
+
+    backups = [fn for fn in listdir('.') if fn.startswith('parity_backup_')
+               and fn.endswith('.json')]
+    if backups:
+        chosen_backup = sorted(backups)[-1]
+        f = open(chosen_backup)
+        chosen_backup = json.loads(f.read())
+        f.close()
+        members, item_ledger, processed_logs = chosen_backup
+        for m in members:
+            session_name = members[m]
+            session_changes[session_name].add(m)
+
     while True:
         now = time()
         diff = now - previous_network_time
@@ -183,8 +192,12 @@ if __name__ == '__main__':
             previous_network_time = now
 
         if not int(round(now)) % BACKUP_INTERVAL:
-            # TODO backup data
-            pass
+            backup = json.dumps([members, item_ledger, processed_logs])
+            timestamp = datetime.now().strftime('%Y%m%d-%H%M')
+
+            f = open('parity_backup_{0}.json'.format(timestamp), 'w+')
+            f.write(backup)
+            f.close()
 
         try:
             main_loop()

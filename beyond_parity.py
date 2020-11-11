@@ -59,7 +59,7 @@ def server_send(msg):
 def server_receive():
     msg = server_socket.recv(4096)
     server_socket.settimeout(POLL_INTERVAL)
-    if msg[0] == '!':
+    if msg[0] == ord('!'):
         msg = gzip.decompress(msg[1:])
     msg = msg.decode('ascii').strip()
     return msg
