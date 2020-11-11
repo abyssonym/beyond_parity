@@ -1,0 +1,28 @@
+INTRODUCTION
+
+This is Beyond Parity, a multiworld utility for vanilla FF6, FF6 randomizers, FF6 mods, and any cross-combination thereof. Beyond Parity currently has three options:
+
+- Inventory: The inventory will be synced between all players in the session.
+- Chests: Chests that have been opened will be synced between all players (hard).
+- Statuses: Players that are in battle will sometimes send their status ailments to other players (chaotic).
+
+Beyond Parity is still in beta so the behavior is expected to be very buggy! Caveat emptor!
+
+SETUP
+
+For now, you will need RetroArch and Python3 installed on your system to run Beyond Parity. RetroArch requires some additional setup to get running. Follow these instructions:
+
+1. Install RetroArch 1.9 or above.
+2. Within RetroArch, navigate to Settings -> User Interface -> Show Advanced Settings. Turn it on.
+3. Navigate to Settings -> Network -> Network Commands (near the bottom). Turn it on.
+    3a. The Network Command Port should be listed as "55355". Don't change it, Beyond Parity uses this port by default.
+4. Install a "BSNES Mercury" core in RetroArch. It has to be Mercury, no other core will work.
+    4a. On Windows, you may need to download the core manually from https://github.com/hunterk/libretro_builds/releases/download/Windows_64-bit/bsnes-mercury-bundle.zip . Unzip this to obtain a dll file, then load it with "Install or Restore a Core" inside of RetroArch.
+    4b. On Linux, RetroArch's build system should have no problem building the core for you automatically.
+
+I am currently running a test server for playtesters to connect to; the connection details are already in the default configuration file, so you only need to run the client to connect to it. To begin playing, follow these instructions:
+
+1. Load up your game rom in RetroArch using the Mercury core.
+2. Start the game and let it run until you obtain control over your character.
+3. At this point, run the file "beyond_parity.py" in Python 3.
+4. You should see a response from the server in your command prompt window. You are now connected to the session. Have fun!
