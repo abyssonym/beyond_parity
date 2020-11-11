@@ -113,7 +113,6 @@ def get_retroarch_data(address, num_bytes):
 
 
 def test_write_retroarch():
-    pause_retroarch()
     DEFAULT_BUTTON_MAP = [0x12, 0x34, 0x56, 0x06]
     REVISED_BUTTON_MAP = [0x06, 0x56, 0x34, 0x12]
     default = ' '.join(['{0:0>2X}'.format(b) for b in DEFAULT_BUTTON_MAP])
@@ -121,10 +120,12 @@ def test_write_retroarch():
     data = get_retroarch_data(BUTTON_MAP_ADDRESS, 4)
     if data == DEFAULT_BUTTON_MAP and data != REVISED_BUTTON_MAP:
         print('RetroArch read SUCCESS')
-        sleep(0.05)
         cmd = 'WRITE_CORE_RAM {0:0>6x} {1}'.format(
             BUTTON_MAP_ADDRESS, revision)
+        pause_retroarch()
         retroarch_socket.sendto(cmd.encode(), ('localhost', RETROARCH_PORT))
+        sleep(0.05)
+        toggle_pause_retroarch()
         data = get_retroarch_data(BUTTON_MAP_ADDRESS, 4)
         if data == REVISED_BUTTON_MAP and data != DEFAULT_BUTTON_MAP:
             print('RetroArch write SUCCESS')
@@ -136,7 +137,6 @@ def test_write_retroarch():
             print('RetroArch write FAILURE')
     else:
         print('RetroArch read FAILURE')
-    toggle_pause_retroarch()
 
 
 def items_to_dict(items):
