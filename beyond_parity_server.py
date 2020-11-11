@@ -1,3 +1,4 @@
+import gzip
 import json
 import socket
 from sys import exc_info
@@ -34,23 +35,38 @@ def convert_dict_keys_to_int(mydict):
     return temp
 
 
+def client_send(msg, client):
+    msg = msg.encode()
+    temp = b'!' + gzip.compress(msg)
+    print(len(msg), len(temp))
+    if len(temp) < len(msg):
+        msg = temp
+    assert len(msg) < 4096
+    server_socket.sendto(msg, client)
+
+
+def client_receive():
+    msg, client = server_socket.recvfrom(4096)
+    if msg[0] == '!':
+        msg = gzip.decompress(msg[1:])
+    msg = msg.decode('ascii').strip()
+    return msg, client
+
+
 def main_loop():
     timestamp = int(round(time()))
     msg, sender, sender_address, sender_port = None, None, None, None
     try:
-        msg, sender = server_socket.recvfrom(4096)
+        msg, sender = client_receive()
         sender_address, sender_port = sender
-
-        #server_socket.sendto(msg, sender)
         print(msg, sender)
 
-        msg = msg.decode('ascii').strip()
         if msg.startswith('NEW '):
             _, session_name, series_number = msg.split(' ')
             if session_name in item_ledger:
                 reply = 'ERROR: Session "{0}" already exists.'.format(
                     session_name)
-                server_socket.sendto(reply.encode(), sender)
+                client_send(reply, sender)
             else:
                 member_name = '{0}-{1}'.format(sender_address, series_number)
                 members[member_name] = session_name
@@ -58,22 +74,22 @@ def main_loop():
 
                 reply = 'Success'.format(
                     session_name)
-                server_socket.sendto(reply.encode(), sender)
-                server_socket.sendto(b'REPORT {}', sender)
+                client_send(reply, sender)
+                client_send('REPORT {}', sender)
 
         elif msg.startswith('JOIN '):
             _, session_name, series_number = msg.split(' ')
             if session_name not in item_ledger:
                 reply = 'ERROR: Session "{0}" does not exist.'.format(
                     session_name)
-                server_socket.sendto(reply.encode(), sender)
+                client_send(reply, sender)
             else:
                 member_name = '{0}-{1}'.format(sender_address, series_number)
                 members[member_name] = session_name
 
                 reply = 'Success'.format(
                     session_name)
-                server_socket.sendto(reply.encode(), sender)
+                client_send(reply, sender)
 
         elif msg.startswith('REPORT '):
             _, series_number, payload = msg.split(' ', 2)
@@ -108,7 +124,7 @@ def main_loop():
                 item_ledger[session_name][item] += change
 
             reply = 'LOG {0}'.format(json.dumps(done_indexes))
-            server_socket.sendto(reply.encode(), sender)
+            client_send(reply, sender)
 
         elif msg.startswith('SYNC '):
             _, series_number = msg.split(' ', 1)
@@ -122,7 +138,7 @@ def main_loop():
                     if session_inventory[key] <= 0:
                         del(session_inventory[key])
                 reply = 'SYNC {0}'.format(json.dumps(session_inventory))
-            server_socket.sendto(reply.encode(), sender)
+            client_send(reply, sender)
 
     except socket.timeout:
         for (key, oldtime) in list(processed_logs.items()):
@@ -132,7 +148,7 @@ def main_loop():
     except:
         error_msg = 'ERROR: {0} {1}'.format(exc_info()[0], exc_info()[1])
         print(error_msg)
-        server_socket.sendto(error_msg.encode(), sender)
+        client_send(error_msg, sender)
 
 if __name__ == '__main__':
     previous_network_time = 0

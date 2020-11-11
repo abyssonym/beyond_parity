@@ -46,6 +46,24 @@ def convert_dict_keys_to_int(mydict):
     return temp
 
 
+def server_send(msg):
+    msg = msg.encode()
+    temp = b'!' + gzip.compress(msg)
+    if len(temp) < len(msg):
+        msg = temp
+    assert len(msg) < 4096
+    server_socket.send(msg)
+
+
+def server_receive():
+    msg = server_socket.recv(4096)
+    server_socket.settimeout(POLL_INTERVAL)
+    if msg[0] == '!':
+        msg = gzip.decompress(msg[1:])
+    msg = msg.decode('ascii').strip()
+    return msg
+
+
 def get_retroarch_data(address, num_bytes):
     cmd = 'READ_CORE_RAM {0:0>6x} {1}'.format(address, num_bytes)
     retroarch_socket.sendto(cmd.encode(), ('localhost', RETROARCH_PORT))
@@ -220,7 +238,7 @@ def get_played_time():
 
 
 def get_server_directive():
-    response = server_socket.recv(4096).decode('ascii').strip()
+    response = server_receive()
     log('Received {0} from server.'.format(response))
     directive, parameters = response.split(' ', 1)
     parameters = json.loads(parameters)
@@ -247,7 +265,7 @@ def send_change_queue():
         if len(msg) > 4095:
             temp = temp[:len(temp)/2]
         else:
-            server_socket.send(msg.encode())
+            server_send(msg)
             break
 
 
@@ -263,7 +281,6 @@ def main_loop():
     except socket.timeout:
         pass
 
-    #pause_retroarch()
     try:
         # read RAM data from retroarch
         played_time = get_played_time()
@@ -333,7 +350,7 @@ def main_loop():
                     temp_inventory[item] = amount
             payload = json.dumps(temp_inventory)
             msg = 'REPORT {0} {1}'.format(SERIES_NUMBER, payload)
-            server_socket.send(msg.encode())
+            server_send(msg)
         if directive == 'LOG':
             indexes = directive_parameters
             change_queue = [(index, item, change)
@@ -348,29 +365,25 @@ def main_loop():
         except socket.timeout:
             pass
 
-    #toggle_pause_retroarch()
-
 
 def create_new_session(name):
+    server_send('NEW {0} {1}'.format(name, SERIES_NUMBER))
     server_socket.settimeout(30)
-    server_socket.send('NEW {0} {1}'.format(name, SERIES_NUMBER).encode())
-    msg = server_socket.recv(4096).decode('ascii').strip()
+    msg = server_receive()
     if msg.startswith('ERROR'):
         raise Exception(msg)
-    server_socket.settimeout(POLL_INTERVAL)
 
 
 def join_session(name):
+    server_send('JOIN {0} {1}'.format(name, SERIES_NUMBER))
     server_socket.settimeout(30)
-    server_socket.send('JOIN {0} {1}'.format(name, SERIES_NUMBER).encode())
-    msg = server_socket.recv(4096).decode('ascii').strip()
+    msg = server_receive()
     if msg.startswith('ERROR'):
         raise Exception(msg)
-    server_socket.settimeout(POLL_INTERVAL)
 
 
 def send_sync_request():
-    server_socket.send('SYNC {0}'.format(SERIES_NUMBER).encode())
+    server_send('SYNC {0}'.format(SERIES_NUMBER))
 
 
 if __name__ == '__main__':
