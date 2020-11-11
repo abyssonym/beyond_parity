@@ -12,6 +12,11 @@ if len(argv) > 1:
 else:
     config.read('beyond_parity.cfg')
 
+SYNC_INVENTORY = config.get('Settings', 'SYNC_INVENTORY').lower() != 'no'
+SYNC_CHESTS = config.get('Settings', 'SYNC_CHESTS').lower() != 'no'
+SYNC_STATUS = config.get('Settings', 'SYNC_STATUS').lower() != 'no'
+SYNC_GP = config.get('Settings', 'SYNC_GP').lower() != 'no'
+
 RETROARCH_PORT = int(config.get('Settings', 'RETROARCH_PORT'))
 POLL_INTERVAL = float(config.get('Settings', 'POLL_INTERVAL'))
 SYNC_INTERVAL = float(config.get('Settings', 'SYNC_INTERVAL'))
@@ -25,6 +30,11 @@ MIN_SANE_INVENTORY = int(config.get('Settings', 'MIN_SANE_INVENTORY'))
 FIELD_ITEM_ADDRESS = int(config.get('Settings', 'FIELD_ITEM_ADDRESS'), 0x10)
 BATTLE_ITEM_ADDRESS = int(config.get('Settings', 'BATTLE_ITEM_ADDRESS'), 0x10)
 PLAYED_TIME_ADDRESS = int(config.get('Settings', 'PLAYED_TIME_ADDRESS'), 0x10)
+BATTLE_CHAR_ADDRESS = int(config.get('Settings', 'BATTLE_CHAR_ADDRESS'), 0x10)
+STATUS_1_ADDRESS = int(config.get('Settings', 'STATUS_1_ADDRESS'), 0x10)
+STATUS_2_ADDRESS = int(config.get('Settings', 'STATUS_2_ADDRESS'), 0x10)
+CHEST_ADDRESS = int(config.get('Settings', 'CHEST_ADDRESS'), 0x10)
+GP_ADDRESS = int(config.get('Settings', 'GP_ADDRESS'), 0x10)
 
 retroarch_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 retroarch_socket.settimeout(POLL_INTERVAL / 5.0)
@@ -33,6 +43,9 @@ server_socket.settimeout(POLL_INTERVAL)
 
 previous_inventory = None
 previous_played_time = 0
+previous_status = None
+previous_gp = None
+
 previous_sync_request = 0
 change_queue = []
 message_index = 0
@@ -227,9 +240,11 @@ def write_inventory(order, to_inventory, raw_data, in_battle):
 
         assert new_raw == raw_data
 
-        if in_battle:
-            retroarch_socket.sendto(battle_cmd, ('localhost', RETROARCH_PORT))
-        retroarch_socket.sendto(field_cmd, ('localhost', RETROARCH_PORT))
+        if SYNC_INVENTORY:
+            if in_battle:
+                retroarch_socket.sendto(battle_cmd,
+                                        ('localhost', RETROARCH_PORT))
+            retroarch_socket.sendto(field_cmd, ('localhost', RETROARCH_PORT))
 
         toggle_pause_retroarch()
         return True
@@ -247,6 +262,62 @@ def get_played_time():
               + (hours * 60 * 60 * 60))
 
     return frames
+
+
+def get_battle_characters():
+    data = get_retroarch_data(BATTLE_CHAR_ADDRESS, 8)
+    characters = []
+    for i in range(4):
+        a, b = data[i*2:(i+1)*2]
+        if a == b == 0xFF:
+            characters.append(False)
+        else:
+            characters.append(True)
+    return characters
+
+
+def get_status_data():
+    status1 = get_retroarch_data(STATUS_1_ADDRESS, 8)
+    status2 = get_retroarch_data(STATUS_2_ADDRESS, 8)
+    char_statuses = {}
+    for i in range(4):
+        a = status1[i*2] | status1[(i*2)+1]
+        b = status2[i*2] | status2[(i*2)+1]
+        char_statuses[i] = a | (b << 16)
+    return char_statuses
+
+
+def write_status(char_statuses):
+    status1, status2 = [], []
+    for i, char_status in sorted(char_statuses.items()):
+        if char_status is None:
+            status1 += [0, 0]
+            status2 += [0, 0]
+            continue
+        a = char_status & 0xFFFF
+        b = char_status >> 16
+        status1 += [a & 0xFF, a >> 8]
+        status2 += [b & 0xFF, b >> 8]
+
+    status1 = ['{0:0>2X}'.format(s) for s in status1]
+    status2 = ['{0:0>2X}'.format(s) for s in status2]
+    status1_cmd = 'WRITE_CORE_RAM {0:0>6x} {1}'.format(
+        STATUS_1_ADDRESS, ' '.join(status1)).encode()
+    status2_cmd = 'WRITE_CORE_RAM {0:0>6x} {1}'.format(
+        STATUS_2_ADDRESS, ' '.join(status2)).encode()
+    if SYNC_STATUS:
+        retroarch_socket.sendto(status1_cmd, ('localhost', RETROARCH_PORT))
+        retroarch_socket.sendto(status2_cmd, ('localhost', RETROARCH_PORT))
+
+
+def get_chest_data():
+    data = get_retroarch_data(CHEST_ADDRESS, 0x40)
+    return data
+
+
+def get_gp():
+    data = get_retroarch_data(GP_ADDRESS, 3)
+    return (data[2] << 16) | (data[1] << 8) | data[0]
 
 
 def get_server_directive():
@@ -302,6 +373,7 @@ def check_inventory_size(inventory):
 def main_loop():
     global message_index, change_queue
     global previous_inventory, previous_played_time
+    global previous_status, previous_gp
     global backoff_sync_interval
 
     directive, directive_parameters = None, None
@@ -319,6 +391,13 @@ def main_loop():
             previous_played_time = 999999999
         field_raw = get_field_items_raw()
         battle_raw = get_battle_items_raw()
+        battle_characters = get_battle_characters()
+        current_status = get_status_data()
+        current_chests = get_chest_data()
+        current_gp = get_gp()
+        if previous_gp is None:
+            previous_gp = current_gp
+
         field_items = get_field_items(field_raw)
         battle_items = get_battle_items(battle_raw)
     except socket.timeout:
@@ -334,6 +413,26 @@ def main_loop():
         in_battle = False
         current_order, current_inventory = items_to_dict(field_items)
         raw_data = field_raw
+
+    # if in combat, determine changed statuses
+    if in_battle:
+        status_on, status_off = {}, {}
+        for (i, c) in enumerate(battle_characters):
+            assert i in current_status
+            if not c:
+                current_status[i] = None
+                continue
+            if previous_status:
+                differences = current_status[i] ^ previous_status[i]
+                on_flags = current_status[i] & differences
+                off_flags = (current_status[i] ^ 0xFFFFFFFF) & differences
+                status_on[i] = on_flags
+                status_off[i] = off_flags
+        previous_status = current_status
+    else:
+        status_on, status_off = None, None
+        battle_characters = None
+        current_status = None
 
     # sanity check to prevent inventory wipe on re-load
     if (previous_inventory is not None and current_inventory is not None
@@ -357,6 +456,16 @@ def main_loop():
                     message_index, item,
                     current_inventory[item]-previous_inventory[item]))
 
+    # update change queue (statuses)
+    if status_on is not None and status_off is not None:
+        for i in range(4):
+            if i in status_on and status_on[i] > 0:
+                change_queue.append((
+                    'STATUS_ON', i, '{0:X}'.format(status_on[i])))
+            if i in status_off and status_off[i] > 0:
+                change_queue.append((
+                    'STATUS_OFF', i, '{0:X}'.format(status_off[i])))
+
     previous_inventory = current_inventory
 
     # ignore all inventory changes after game load until sync with server
@@ -366,6 +475,8 @@ def main_loop():
         previous_played_time = 999999999
 
     synced_inventory = None
+    synced_status = {}
+    update_status_flag = False
     if directive is not None:
         backoff_sync_interval = SYNC_INTERVAL
         if directive == 'SYNC':
@@ -374,7 +485,8 @@ def main_loop():
                 if item not in synced_inventory:
                     synced_inventory[item] = 0
             for (index, item, change) in change_queue:
-                synced_inventory[item] += change
+                if isinstance(index, int):
+                    synced_inventory[item] += change
         if directive == 'REPORT':
             temp_inventory = {}
             for item, amount in current_inventory.items():
@@ -389,11 +501,31 @@ def main_loop():
                             for (index, item, change) in change_queue
                             if index not in indexes]
 
+        if in_battle and directive in ['STATUS_ON', 'STATUS_OFF']:
+            character, change = directive_parameters
+            change = int(change, 0x10)
+            for i in range(4):
+                synced_status[i] = current_status[i]
+                if current_status[i] is not None:
+                    value = current_status[i]
+                    if i == character:
+                        if directive == 'STATUS_ON':
+                            value |= change
+                        elif directive == 'STATUS_OFF':
+                            value &= (0xFFFFFFFF ^ change)
+
+                    if value != current_status[i]:
+                        update_status_flag = True
+                        synced_status[i] = value
+
     if change_queue:
         try:
             send_change_queue()
         except ConnectionError:
             log('Unable to connect to server.')
+        change_queue = [(index, item, change)
+                        for (index, item, change) in change_queue
+                        if isinstance(index, int)]
 
     if synced_inventory is not None:
         try:
@@ -404,6 +536,9 @@ def main_loop():
                     previous_played_time = played_time
         except socket.timeout:
             pass
+
+    if update_status_flag:
+        write_status(synced_status)
 
 
 def create_new_session(name):
@@ -483,7 +618,7 @@ if __name__ == '__main__':
 
             main_loop()
 
-    except Exception:
+    except:
         from sys import exc_info
         print('Error:', exc_info()[0], exc_info()[1])
         input('')

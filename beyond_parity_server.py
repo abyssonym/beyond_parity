@@ -22,6 +22,7 @@ members = {}
 item_ledger = {}
 processed_logs = {}
 session_changes = defaultdict(set)
+session_status_changes = defaultdict(set)
 
 
 def convert_dict_keys_to_int(mydict):
@@ -59,6 +60,7 @@ def client_receive():
 def main_loop():
     timestamp = int(round(time()))
     msg, sender, sender_address, sender_port = None, None, None, None
+    session_name, series_number, member_name = None, None, None
     try:
         msg, sender = client_receive()
         sender_address, sender_port = sender
@@ -129,6 +131,12 @@ def main_loop():
             change_queue = json.loads(payload)
             done_indexes = []
             for (index, item, change) in change_queue:
+                if isinstance(index, str) and index.startswith('STATUS_'):
+                    for m in session_members:
+                        session_status_changes[m].add(
+                            (index.upper(), item, change))
+                    continue
+
                 done_indexes.append(index)
                 log_identifier = '{0}-{1}'.format(member_name, index)
                 if log_identifier in processed_logs:
@@ -157,6 +165,17 @@ def main_loop():
                     reply = 'SYNC {0}'.format(json.dumps(session_inventory))
                     client_send(reply, sender)
                     session_changes[session_name].remove(member_name)
+
+        # status change book keeping
+        if (member_name is not None and member_name in session_status_changes
+                and session_status_changes[member_name]):
+            for command, character, change in list(
+                    sorted(session_status_changes[member_name])):
+                parameters = [character, change]
+                reply = '{0} {1}'.format(command, json.dumps(parameters))
+                client_send(reply, sender)
+                session_status_changes[member_name].remove(
+                    (command, character, change))
 
     except socket.timeout:
         for (key, oldtime) in list(processed_logs.items()):
