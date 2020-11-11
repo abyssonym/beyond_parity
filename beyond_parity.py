@@ -160,6 +160,7 @@ def write_inventory(order, to_inventory, raw_data, in_battle):
                     item not in inventory or inventory[item] == 0):
                 assert order.count(item) == 1
                 index = order.index(item)
+                order[index] = 0xFF
 
     for item in sorted(inventory):
         if item < 0xFF:
