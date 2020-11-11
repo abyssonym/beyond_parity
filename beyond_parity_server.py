@@ -50,7 +50,13 @@ def client_receive():
     msg, client = server_socket.recvfrom(4096)
     if msg[0] == '!':
         msg = gzip.decompress(msg[1:])
-    msg = msg.decode('ascii').strip()
+
+    try:
+        msg = msg.decode('ascii').strip()
+    except UnicodeDecodeError:
+        print(msg)
+        raise UnicodeDecodeError(msg)
+
     return msg, client
 
 
@@ -180,4 +186,8 @@ if __name__ == '__main__':
             # TODO backup data
             pass
 
-        main_loop()
+        try:
+            main_loop()
+        except:
+            error_msg = 'ERROR: {0} {1}'.format(exc_info()[0], exc_info()[1])
+            print(error_msg)
