@@ -44,6 +44,7 @@ server_socket.settimeout(POLL_INTERVAL)
 previous_inventory = None
 previous_played_time = 0
 previous_status = None
+previous_chests = None
 previous_gp = None
 
 previous_sync_request = 0
@@ -315,6 +316,22 @@ def get_chest_data():
     return data
 
 
+def write_chests(old_chests, new_chests):
+    to_write = []
+    assert len(old_chests) == len(new_chests)
+    for (a, b) in zip(old_chests, new_chests):
+        assert 0 <= a <= 0xFF
+        assert 0 <= b <= 0xFF
+        to_write.append(a | b)
+    assert len(to_write) == 0x40
+    to_write = ['{0:0>2X}'.format(c) for c in to_write]
+
+    chests_cmd = 'WRITE_CORE_RAM {0:0>6x} {1}'.format(
+        CHEST_ADDRESS, ' '.join(to_write)).encode()
+
+    retroarch_socket.sendto(chests_cmd, ('localhost', RETROARCH_PORT))
+
+
 def get_gp():
     data = get_retroarch_data(GP_ADDRESS, 3)
     return (data[2] << 16) | (data[1] << 8) | data[0]
@@ -360,6 +377,11 @@ def send_change_queue():
             break
 
 
+def send_chests(chests):
+    msg = 'CHESTS {0} {1}'.format(SERIES_NUMBER, json.dumps(chests))
+    server_send(msg)
+
+
 def check_inventory_size(inventory):
     count = 0
     for (item, amount) in inventory.items():
@@ -373,7 +395,7 @@ def check_inventory_size(inventory):
 def main_loop():
     global message_index, change_queue
     global previous_inventory, previous_played_time
-    global previous_status, previous_gp
+    global previous_status, previous_chests, previous_gp
     global backoff_sync_interval
 
     directive, directive_parameters = None, None
@@ -391,9 +413,17 @@ def main_loop():
             previous_played_time = 999999999
         field_raw = get_field_items_raw()
         battle_raw = get_battle_items_raw()
+
         battle_characters = get_battle_characters()
         current_status = get_status_data()
+
         current_chests = get_chest_data()
+        chests_opened = False
+        if previous_chests is None:
+            previous_chests = current_chests
+        elif previous_chests != current_chests:
+            chests_opened = True
+
         current_gp = get_gp()
         if previous_gp is None:
             previous_gp = current_gp
@@ -500,6 +530,9 @@ def main_loop():
             change_queue = [(index, item, change)
                             for (index, item, change) in change_queue
                             if index not in indexes]
+        if directive == 'CHESTS':
+            synced_chests = directive_parameters
+            write_chests(current_chests, synced_chests)
 
         if in_battle and directive in ['STATUS_ON', 'STATUS_OFF']:
             character, change = directive_parameters
@@ -526,6 +559,13 @@ def main_loop():
         change_queue = [(index, item, change)
                         for (index, item, change) in change_queue
                         if isinstance(index, int)]
+
+    if chests_opened:
+        try:
+            send_chests(current_chests)
+            previous_chests = current_chests
+        except ConnectionError:
+            log('Unable to connect to server.')
 
     if synced_inventory is not None:
         try:
@@ -561,7 +601,10 @@ def send_sync_request():
     global backoff_sync_interval
     backoff_sync_interval *= 1.5
     backoff_sync_interval = min(backoff_sync_interval, SYNC_INTERVAL * 10)
-    server_send('SYNC {0}'.format(SERIES_NUMBER))
+    if previous_played_time >= 999999999:
+        server_send('SYNC {0} !'.format(SERIES_NUMBER))
+    else:
+        server_send('SYNC {0}'.format(SERIES_NUMBER))
 
 
 if __name__ == '__main__':

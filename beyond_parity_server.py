@@ -21,8 +21,10 @@ server_socket.settimeout(POLL_INTERVAL)
 members = {}
 item_ledger = {}
 processed_logs = {}
+session_chests = {}
 session_changes = defaultdict(set)
 session_status_changes = defaultdict(set)
+session_chest_changes = defaultdict(set)
 
 
 def convert_dict_keys_to_int(mydict):
@@ -61,6 +63,7 @@ def main_loop():
     timestamp = int(round(time()))
     msg, sender, sender_address, sender_port = None, None, None, None
     session_name, series_number, member_name = None, None, None
+    session_members = None
     try:
         msg, sender = client_receive()
         sender_address, sender_port = sender
@@ -77,6 +80,7 @@ def main_loop():
                 members[member_name] = session_name
                 session_changes[session_name].add(member_name)
                 item_ledger[session_name] = None
+                session_chests[session_name] = [0] * 0x40
 
                 reply = 'Success'.format(
                     session_name)
@@ -149,14 +153,19 @@ def main_loop():
             client_send(reply, sender)
 
         elif msg.startswith('SYNC '):
-            _, series_number = msg.split(' ', 1)
+            try:
+                _, series_number, option = msg.split(' ', 2)
+                force_sync = option == '!'
+            except:
+                _, series_number = msg.split(' ', 1)
+                force_sync = False
             member_name = '{0}-{1}'.format(sender_address, series_number)
             session_name = members[member_name]
             if item_ledger[session_name] is None:
                 reply = 'REPORT {}'
                 client_send(reply, sender)
             else:
-                if member_name in session_changes[session_name]:
+                if member_name in session_changes[session_name] or force_sync:
                     my_ledger = item_ledger[session_name]
                     session_inventory = {}
                     for key in my_ledger:
@@ -164,7 +173,22 @@ def main_loop():
                             session_inventory[key] = my_ledger[key]
                     reply = 'SYNC {0}'.format(json.dumps(session_inventory))
                     client_send(reply, sender)
-                    session_changes[session_name].remove(member_name)
+                    if member_name in session_changes[session_name]:
+                        session_changes[session_name].remove(member_name)
+
+        elif msg.startswith('CHESTS '):
+            _, series_number, payload = msg.split(' ', 2)
+            member_name = '{0}-{1}'.format(sender_address, series_number)
+            session_name = members[member_name]
+            session_members = {m for m in members
+                               if members[m] == session_name
+                               and m != member_name}
+            chests = json.loads(payload)
+            old_chests = session_chests[session_name]
+            assert len(old_chests) == len(chests) == 0x40
+            session_chests[session_name] = [a | b for (a, b) in
+                                            zip(old_chests, chests)]
+            session_chest_changes[session_name] |= session_members
 
         # status change book keeping
         if (member_name is not None and member_name in session_status_changes
@@ -176,6 +200,15 @@ def main_loop():
                 client_send(reply, sender)
                 session_status_changes[member_name].remove(
                     (command, character, change))
+
+        # chest change book keeping
+        if (member_name is not None and session_name is not None
+                and session_name in session_chest_changes
+                and member_name in session_chest_changes[session_name]):
+            reply = 'CHESTS {0}'.format(
+                json.dumps(session_chests[session_name]))
+            client_send(reply, sender)
+            session_chest_changes[session_name].remove(member_name)
 
     except socket.timeout:
         for (key, oldtime) in list(processed_logs.items()):
@@ -198,7 +231,7 @@ if __name__ == '__main__':
         f = open(chosen_backup)
         chosen_backup = json.loads(f.read())
         f.close()
-        members, item_ledger, processed_logs = chosen_backup
+        members, item_ledger, processed_logs, session_chests = chosen_backup
         for m in members:
             session_name = members[m]
             session_changes[session_name].add(m)
@@ -218,7 +251,8 @@ if __name__ == '__main__':
 
         if int(round(now - previous_backup_time)) >= BACKUP_INTERVAL:
             previous_backup_time = now
-            backup = json.dumps([members, item_ledger, processed_logs])
+            backup = json.dumps([members, item_ledger, processed_logs,
+                                 session_chests])
             timestamp = datetime.now().strftime('%Y%m%d-%H%M')
 
             f = open('parity_backup_{0}.json'.format(timestamp), 'w+')
