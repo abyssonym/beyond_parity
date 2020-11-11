@@ -7,36 +7,47 @@ from datetime import datetime, timezone
 from sys import argv
 from time import time, sleep
 
-config = ConfigParser()
-if len(argv) > 1:
-    config.read(argv[1])
-else:
-    config.read('beyond_parity.cfg')
+try:
+    config = ConfigParser()
+    if len(argv) > 1:
+        config.read(argv[1])
+    else:
+        config.read('beyond_parity.cfg')
 
-SYNC_INVENTORY = config.get('Settings', 'SYNC_INVENTORY').lower() != 'no'
-SYNC_CHESTS = config.get('Settings', 'SYNC_CHESTS').lower() != 'no'
-SYNC_STATUS = config.get('Settings', 'SYNC_STATUS').lower() != 'no'
-SYNC_GP = config.get('Settings', 'SYNC_GP').lower() != 'no'
+    SYNC_INVENTORY = config.get('Settings', 'SYNC_INVENTORY').lower() != 'no'
+    SYNC_CHESTS = config.get('Settings', 'SYNC_CHESTS').lower() != 'no'
+    SYNC_STATUS = config.get('Settings', 'SYNC_STATUS').lower() != 'no'
+    SYNC_GP = config.get('Settings', 'SYNC_GP').lower() != 'no'
 
-RETROARCH_PORT = int(config.get('Settings', 'RETROARCH_PORT'))
-POLL_INTERVAL = float(config.get('Settings', 'POLL_INTERVAL'))
-SYNC_INTERVAL = float(config.get('Settings', 'SYNC_INTERVAL'))
-backoff_sync_interval = SYNC_INTERVAL
-PAUSE_DELAY_INTERVAL = float(config.get('Settings', 'PAUSE_DELAY_INTERVAL'))
-SIMILARITY_THRESHOLD = float(config.get('Settings', 'SIMILARITY_THRESHOLD'))
-SERIES_NUMBER = int(round(time()))
-MINIMUM_PLAYED_TIME = int(config.get('Settings', 'MINIMUM_PLAYED_TIME'))
-MIN_SANE_INVENTORY = int(config.get('Settings', 'MIN_SANE_INVENTORY'))
+    RETROARCH_PORT = int(config.get('Settings', 'RETROARCH_PORT'))
+    POLL_INTERVAL = float(config.get('Settings', 'POLL_INTERVAL'))
+    SYNC_INTERVAL = float(config.get('Settings', 'SYNC_INTERVAL'))
+    backoff_sync_interval = SYNC_INTERVAL
+    PAUSE_DELAY_INTERVAL = float(
+        config.get('Settings', 'PAUSE_DELAY_INTERVAL'))
+    SIMILARITY_THRESHOLD = float(
+        config.get('Settings', 'SIMILARITY_THRESHOLD'))
+    SERIES_NUMBER = int(round(time()))
+    MINIMUM_PLAYED_TIME = int(config.get('Settings', 'MINIMUM_PLAYED_TIME'))
+    MIN_SANE_INVENTORY = int(config.get('Settings', 'MIN_SANE_INVENTORY'))
 
-FIELD_ITEM_ADDRESS = int(config.get('Settings', 'FIELD_ITEM_ADDRESS'), 0x10)
-BATTLE_ITEM_ADDRESS = int(config.get('Settings', 'BATTLE_ITEM_ADDRESS'), 0x10)
-PLAYED_TIME_ADDRESS = int(config.get('Settings', 'PLAYED_TIME_ADDRESS'), 0x10)
-BATTLE_CHAR_ADDRESS = int(config.get('Settings', 'BATTLE_CHAR_ADDRESS'), 0x10)
-STATUS_1_ADDRESS = int(config.get('Settings', 'STATUS_1_ADDRESS'), 0x10)
-STATUS_2_ADDRESS = int(config.get('Settings', 'STATUS_2_ADDRESS'), 0x10)
-CHEST_ADDRESS = int(config.get('Settings', 'CHEST_ADDRESS'), 0x10)
-GP_ADDRESS = int(config.get('Settings', 'GP_ADDRESS'), 0x10)
-BUTTON_MAP_ADDRESS = int(config.get('Settings', 'BUTTON_MAP_ADDRESS'), 0x10)
+    FIELD_ITEM_ADDRESS = int(
+        config.get('Settings', 'FIELD_ITEM_ADDRESS'), 0x10)
+    BATTLE_ITEM_ADDRESS = int(
+        config.get('Settings', 'BATTLE_ITEM_ADDRESS'), 0x10)
+    PLAYED_TIME_ADDRESS = int(
+        config.get('Settings', 'PLAYED_TIME_ADDRESS'), 0x10)
+    BATTLE_CHAR_ADDRESS = int(
+        config.get('Settings', 'BATTLE_CHAR_ADDRESS'), 0x10)
+    STATUS_1_ADDRESS = int(config.get('Settings', 'STATUS_1_ADDRESS'), 0x10)
+    STATUS_2_ADDRESS = int(config.get('Settings', 'STATUS_2_ADDRESS'), 0x10)
+    CHEST_ADDRESS = int(config.get('Settings', 'CHEST_ADDRESS'), 0x10)
+    GP_ADDRESS = int(config.get('Settings', 'GP_ADDRESS'), 0x10)
+    BUTTON_MAP_ADDRESS = int(
+        config.get('Settings', 'BUTTON_MAP_ADDRESS'), 0x10)
+except:
+    input("Configuration file error. ")
+    exit(0)
 
 retroarch_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 retroarch_socket.settimeout(POLL_INTERVAL / 5.0)
@@ -375,8 +386,8 @@ def get_server_directive():
     except:
         log('Bad directive: {0}'.format(response))
         raise Exception(response)
-    #log('Received {0} from server.'.format(response))
-    log('Received {0} from server.'.format(directive))
+    log('Received {0} from server.'.format(response))
+    #log('Received {0} from server.'.format(directive))
     return directive, parameters
 
 
