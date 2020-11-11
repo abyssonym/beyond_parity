@@ -1,6 +1,7 @@
 import gzip
 import json
 import socket
+from collections import defaultdict
 from sys import exc_info
 from time import time, sleep
 
@@ -18,6 +19,7 @@ server_socket.settimeout(POLL_INTERVAL)
 members = {}
 item_ledger = {}
 processed_logs = {}
+session_changes = defaultdict(set)
 
 
 def convert_dict_keys_to_int(mydict):
@@ -38,7 +40,6 @@ def convert_dict_keys_to_int(mydict):
 def client_send(msg, client):
     msg = msg.encode()
     temp = b'!' + gzip.compress(msg)
-    print(len(msg), len(temp))
     if len(temp) < len(msg):
         msg = temp
     assert len(msg) < 4096
@@ -70,6 +71,7 @@ def main_loop():
             else:
                 member_name = '{0}-{1}'.format(sender_address, series_number)
                 members[member_name] = session_name
+                session_changes[session_name].add(member_name)
                 item_ledger[session_name] = None
 
                 reply = 'Success'.format(
@@ -86,6 +88,7 @@ def main_loop():
             else:
                 member_name = '{0}-{1}'.format(sender_address, series_number)
                 members[member_name] = session_name
+                session_changes[session_name].add(member_name)
 
                 reply = 'Success'.format(
                     session_name)
@@ -98,6 +101,11 @@ def main_loop():
 
             if (session_name in item_ledger
                     and item_ledger[session_name] is None):
+                session_name = members[member_name]
+                session_members = {m for m in members
+                                   if members[m] == session_name}
+                session_changes[session_name] |= session_members
+
                 item_ledger[session_name] = {}
                 current_inventory = convert_dict_keys_to_int(
                     json.loads(payload))
@@ -111,6 +119,10 @@ def main_loop():
             _, series_number, payload = msg.split(' ', 2)
             member_name = '{0}-{1}'.format(sender_address, series_number)
             session_name = members[member_name]
+            session_members = {m for m in members
+                               if members[m] == session_name
+                               and m != member_name}
+            session_changes[session_name] |= session_members
 
             change_queue = json.loads(payload)
             done_indexes = []
@@ -132,13 +144,16 @@ def main_loop():
             session_name = members[member_name]
             if item_ledger[session_name] is None:
                 reply = 'REPORT {}'
+                client_send(reply, sender)
             else:
-                session_inventory = dict(item_ledger[session_name])
-                for key in list(session_inventory.keys()):
-                    if session_inventory[key] <= 0:
-                        del(session_inventory[key])
-                reply = 'SYNC {0}'.format(json.dumps(session_inventory))
-            client_send(reply, sender)
+                if member_name in session_changes[session_name]:
+                    session_inventory = dict(item_ledger[session_name])
+                    for key in list(session_inventory.keys()):
+                        if session_inventory[key] <= 0:
+                            del(session_inventory[key])
+                    reply = 'SYNC {0}'.format(json.dumps(session_inventory))
+                    client_send(reply, sender)
+                    session_changes[session_name].remove(member_name)
 
     except socket.timeout:
         for (key, oldtime) in list(processed_logs.items()):

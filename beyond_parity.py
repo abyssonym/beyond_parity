@@ -6,7 +6,8 @@ from time import time, sleep
 
 RETROARCH_PORT = 55355
 POLL_INTERVAL = 1.01
-SYNC_INTERVAL = 5
+SYNC_INTERVAL = 6
+backoff_sync_interval = SYNC_INTERVAL
 PAUSE_DELAY_INTERVAL = 0.05
 SIMILARITY_THRESHOLD = 0.95
 SERIES_NUMBER = int(round(time()))
@@ -22,7 +23,7 @@ server_socket.settimeout(POLL_INTERVAL)
 
 previous_inventory = None
 previous_played_time = 0
-previous_sync_time = 0
+previous_sync_request = 0
 change_queue = []
 message_index = 0
 
@@ -239,11 +240,11 @@ def get_played_time():
 
 def get_server_directive():
     response = server_receive()
-    log('Received {0} from server.'.format(response))
     directive, parameters = response.split(' ', 1)
     parameters = json.loads(parameters)
     parameters = convert_dict_keys_to_int(parameters)
-    #log('Received {0} from server.'.format(directive))
+    #log('Received {0} from server.'.format(response))
+    log('Received {0} from server.'.format(directive))
     return directive, parameters
 
 
@@ -272,6 +273,7 @@ def send_change_queue():
 def main_loop():
     global message_index, change_queue
     global previous_inventory, previous_played_time
+    global backoff_sync_interval
 
     directive, directive_parameters = None, None
     try:
@@ -318,12 +320,6 @@ def main_loop():
                     message_index, item,
                     current_inventory[item]-previous_inventory[item]))
 
-    if change_queue:
-        try:
-            send_change_queue()
-        except ConnectionError:
-            log('Unable to connect to server.')
-
     previous_inventory = current_inventory
 
     # ignore all inventory changes after game load until sync with server
@@ -334,6 +330,7 @@ def main_loop():
 
     synced_inventory = None
     if directive is not None:
+        backoff_sync_interval = SYNC_INTERVAL
         if directive == 'SYNC':
             synced_inventory = directive_parameters
             if previous_played_time > played_time:
@@ -356,6 +353,12 @@ def main_loop():
             change_queue = [(index, item, change)
                             for (index, item, change) in change_queue
                             if index not in indexes]
+
+    if change_queue:
+        try:
+            send_change_queue()
+        except ConnectionError:
+            log('Unable to connect to server.')
 
     if synced_inventory is not None:
         try:
@@ -383,6 +386,9 @@ def join_session(name):
 
 
 def send_sync_request():
+    global backoff_sync_interval
+    backoff_sync_interval *= 1.5
+    backoff_sync_interval = min(backoff_sync_interval, SYNC_INTERVAL * 10)
     server_send('SYNC {0}'.format(SERIES_NUMBER))
 
 
@@ -419,13 +425,13 @@ if __name__ == '__main__':
                 now = time()
             previous_network_time = now
 
-            if now - previous_sync_time > SYNC_INTERVAL:
+            if now - previous_sync_request > backoff_sync_interval:
                 send_sync_request()
-                previous_sync_time = now
+                previous_sync_request = now
 
             main_loop()
 
-    except ValueError:
+    except Exception:
         from sys import exc_info
-        print('Error:', exc_info()[0])
+        print('Error:', exc_info()[0], exc_info()[1])
         input('')
