@@ -1,6 +1,7 @@
 import gzip
 import json
 import socket
+import traceback
 from configparser import ConfigParser
 from datetime import datetime, timezone
 from sys import argv
@@ -664,5 +665,6 @@ if __name__ == '__main__':
 
     except:
         from sys import exc_info
+        traceback.print_exc()
         print('Error:', exc_info()[0], exc_info()[1])
         input('')
