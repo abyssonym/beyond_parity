@@ -36,6 +36,7 @@ STATUS_1_ADDRESS = int(config.get('Settings', 'STATUS_1_ADDRESS'), 0x10)
 STATUS_2_ADDRESS = int(config.get('Settings', 'STATUS_2_ADDRESS'), 0x10)
 CHEST_ADDRESS = int(config.get('Settings', 'CHEST_ADDRESS'), 0x10)
 GP_ADDRESS = int(config.get('Settings', 'GP_ADDRESS'), 0x10)
+BUTTON_MAP_ADDRESS = int(config.get('Settings', 'BUTTON_MAP_ADDRESS'), 0x10)
 
 retroarch_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 retroarch_socket.settimeout(POLL_INTERVAL / 5.0)
@@ -98,6 +99,33 @@ def get_retroarch_data(address, num_bytes):
     data = [int(d, 0x10) for d in data.split(' ')[2:]]
     assert len(data) == num_bytes
     return data
+
+
+def test_write_retroarch():
+    pause_retroarch()
+    DEFAULT_BUTTON_MAP = [0x12, 0x34, 0x56, 0x06]
+    REVISED_BUTTON_MAP = [0x06, 0x56, 0x34, 0x12]
+    default = ' '.join(['{0:0>2X}'.format(b) for b in DEFAULT_BUTTON_MAP])
+    revision = ' '.join(['{0:0>2X}'.format(b) for b in REVISED_BUTTON_MAP])
+    data = get_retroarch_data(BUTTON_MAP_ADDRESS, 4)
+    if data == DEFAULT_BUTTON_MAP and data != REVISED_BUTTON_MAP:
+        print('RetroArch read SUCCESS')
+        sleep(0.05)
+        cmd = 'WRITE_CORE_RAM {0:0>6x} {1}'.format(
+            BUTTON_MAP_ADDRESS, revision)
+        retroarch_socket.sendto(cmd.encode(), ('localhost', RETROARCH_PORT))
+        data = get_retroarch_data(BUTTON_MAP_ADDRESS, 4)
+        if data == REVISED_BUTTON_MAP and data != DEFAULT_BUTTON_MAP:
+            print('RetroArch write SUCCESS')
+            cmd = 'WRITE_CORE_RAM {0:0>6x} {1}'.format(
+                BUTTON_MAP_ADDRESS, default)
+            retroarch_socket.sendto(cmd.encode(), ('localhost',
+                                                   RETROARCH_PORT))
+        else:
+            print('RetroArch write FAILURE')
+    else:
+        print('RetroArch read FAILURE')
+    toggle_pause_retroarch()
 
 
 def items_to_dict(items):
@@ -611,6 +639,8 @@ def send_sync_request():
 
 if __name__ == '__main__':
     try:
+        test_write_retroarch()
+
         host, port, session_name = None, None, None
         if config.has_option('Settings', 'SERVER_HOSTNAME'):
             host = config.get('Settings', 'SERVER_HOSTNAME').strip()
