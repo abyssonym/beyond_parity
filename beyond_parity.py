@@ -241,9 +241,13 @@ def get_played_time():
 
 def get_server_directive():
     response = server_receive()
-    directive, parameters = response.split(' ', 1)
-    parameters = json.loads(parameters)
-    parameters = convert_dict_keys_to_int(parameters)
+    try:
+        directive, parameters = response.split(' ', 1)
+        parameters = json.loads(parameters)
+        parameters = convert_dict_keys_to_int(parameters)
+    except:
+        log('Bad directive: {0}'.format(response))
+        raise Exception(response)
     #log('Received {0} from server.'.format(response))
     log('Received {0} from server.'.format(directive))
     return directive, parameters
