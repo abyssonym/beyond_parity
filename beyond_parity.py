@@ -1,22 +1,30 @@
 import gzip
 import json
 import socket
+from configparser import ConfigParser
 from datetime import datetime, timezone
+from sys import argv
 from time import time, sleep
 
-RETROARCH_PORT = 55355
-POLL_INTERVAL = 1.01
-SYNC_INTERVAL = 6
-backoff_sync_interval = SYNC_INTERVAL
-PAUSE_DELAY_INTERVAL = 0.05
-SIMILARITY_THRESHOLD = 0.95
-SERIES_NUMBER = int(round(time()))
-MINIMUM_PLAYED_TIME = 600
-MIN_SANE_INVENTORY = 7
+config = ConfigParser()
+if len(argv) > 1:
+    config.read(argv[1])
+else:
+    config.read('beyond_parity.cfg')
 
-FIELD_ITEM_ADDRESS = 0x7e1869
-BATTLE_ITEM_ADDRESS = 0x7e2686
-PLAYED_TIME_ADDRESS = 0x7e021b
+RETROARCH_PORT = int(config.get('Settings', 'RETROARCH_PORT'))
+POLL_INTERVAL = float(config.get('Settings', 'POLL_INTERVAL'))
+SYNC_INTERVAL = float(config.get('Settings', 'SYNC_INTERVAL'))
+backoff_sync_interval = SYNC_INTERVAL
+PAUSE_DELAY_INTERVAL = float(config.get('Settings', 'PAUSE_DELAY_INTERVAL'))
+SIMILARITY_THRESHOLD = float(config.get('Settings', 'SIMILARITY_THRESHOLD'))
+SERIES_NUMBER = int(round(time()))
+MINIMUM_PLAYED_TIME = int(config.get('Settings', 'MINIMUM_PLAYED_TIME'))
+MIN_SANE_INVENTORY = int(config.get('Settings', 'MIN_SANE_INVENTORY'))
+
+FIELD_ITEM_ADDRESS = int(config.get('Settings', 'FIELD_ITEM_ADDRESS'), 0x10)
+BATTLE_ITEM_ADDRESS = int(config.get('Settings', 'BATTLE_ITEM_ADDRESS'), 0x10)
+PLAYED_TIME_ADDRESS = int(config.get('Settings', 'PLAYED_TIME_ADDRESS'), 0x10)
 
 retroarch_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 retroarch_socket.settimeout(POLL_INTERVAL / 5.0)
@@ -256,11 +264,15 @@ def get_server_directive():
 
 
 def pause_retroarch():
+    if PAUSE_DELAY_INTERVAL <= 0:
+        return
     cmd = b'FRAMEADVANCE'
     retroarch_socket.sendto(cmd, ('localhost', RETROARCH_PORT))
 
 
 def toggle_pause_retroarch():
+    if PAUSE_DELAY_INTERVAL <= 0:
+        return
     cmd = b'PAUSE_TOGGLE'
     retroarch_socket.sendto(cmd, ('localhost', RETROARCH_PORT))
 
@@ -419,22 +431,37 @@ def send_sync_request():
 
 if __name__ == '__main__':
     try:
-        host = socket.gethostbyname(input('Host address? '))
+        host, port, session_name = None, None, None
+        if config.has_option('Settings', 'SERVER_HOSTNAME'):
+            host = config.get('Settings', 'SERVER_HOSTNAME').strip()
+        if not host:
+            host = input('Host address? ')
+        host = socket.gethostbyname(host)
 
-        port = input('Port? ')
+        if config.has_option('Settings', 'SERVER_PORT'):
+            port = config.get('Settings', 'SERVER_PORT').strip()
+        if not port:
+            port = input('Port? ')
         port = int(port)
 
         server_socket.connect((host, port))
 
         OPTION_JOIN_SESSION, OPTION_NEW_SESSION = 1, 2
-        option = input('\nChoose one: \n'
-                       '{0}. Join an existing session.\n'
-                       '{1}. Start a new session.\n\n'
-                       '? '.format(OPTION_JOIN_SESSION, OPTION_NEW_SESSION))
-        option = int(option)
-        assert option in [OPTION_JOIN_SESSION, OPTION_NEW_SESSION]
+        if config.has_option('Settings', 'JOIN_SESSION_NAME'):
+            session_name = config.get('Settings', 'JOIN_SESSION_NAME').strip()
+            if session_name:
+                option = OPTION_JOIN_SESSION
 
-        session_name = input('Session name? ').strip()
+        while not session_name:
+            option = input('\nChoose one: \n'
+                           '{0}. Join an existing session.\n'
+                           '{1}. Start a new session.\n\n'
+                           '? '.format(OPTION_JOIN_SESSION,
+                                       OPTION_NEW_SESSION))
+            option = int(option)
+            assert option in [OPTION_JOIN_SESSION, OPTION_NEW_SESSION]
+
+            session_name = input('Session name? ').strip()
 
         if option == OPTION_JOIN_SESSION:
             join_session(session_name)
