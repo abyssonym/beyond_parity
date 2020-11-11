@@ -170,6 +170,7 @@ def main_loop():
 
 if __name__ == '__main__':
     previous_network_time = 0
+    previous_backup_time = time()
 
     backups = [fn for fn in listdir('.') if fn.startswith('parity_backup_')
                and fn.endswith('.json')]
@@ -196,7 +197,8 @@ if __name__ == '__main__':
         else:
             previous_network_time = now
 
-        if not int(round(now)) % BACKUP_INTERVAL:
+        if int(round(now - previous_backup_time)) >= BACKUP_INTERVAL:
+            previous_backup_time = now
             backup = json.dumps([members, item_ledger, processed_logs])
             timestamp = datetime.now().strftime('%Y%m%d-%H%M')
 
