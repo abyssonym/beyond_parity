@@ -43,7 +43,7 @@ server_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 server_socket.settimeout(POLL_INTERVAL)
 
 previous_inventory = None
-previous_played_time = 0
+previous_played_time = 999999999
 previous_status = None
 previous_chests = None
 previous_gp = None
