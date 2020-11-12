@@ -517,6 +517,7 @@ def main_loop():
         current_chests = get_chest_data()
     except (IOError, AssertionError):
         log('{0}: {1}'.format(*exc_info()[:2]))
+        retroarch_socket.connect(('localhost', RETROARCH_PORT))
         force_sync = True
         return
 
