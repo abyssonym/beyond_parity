@@ -1,5 +1,6 @@
 import gzip
 import json
+import random
 import socket
 import traceback
 from configparser import ConfigParser
@@ -13,6 +14,11 @@ try:
         config.read(argv[1])
     else:
         config.read('beyond_parity.cfg')
+
+    if config.has_option('Settings', 'DEBUG'):
+        DEBUG = config.get('Settings', 'DEBUG').lower() == 'yes'
+    else:
+        DEBUG = False
 
     SYNC_INVENTORY = config.get('Settings', 'SYNC_INVENTORY').lower() != 'no'
     SYNC_CHESTS = config.get('Settings', 'SYNC_CHESTS').lower() != 'no'
@@ -45,6 +51,11 @@ try:
     GP_ADDRESS = int(config.get('Settings', 'GP_ADDRESS'), 0x10)
     BUTTON_MAP_ADDRESS = int(
         config.get('Settings', 'BUTTON_MAP_ADDRESS'), 0x10)
+
+    if config.has_option('Settings', 'TEST_LATENCY'):
+        TEST_LATENCY = config.get('Settings', 'TEST_LATENCY').lower() == 'yes'
+    else:
+        TEST_LATENCY = False
 except:
     input("Configuration file error. ")
     exit(0)
@@ -65,8 +76,17 @@ change_queue = []
 message_index = 0
 
 
-def log(msg):
-    print(datetime.now().astimezone().strftime('%Y-%m-%d %H:%M:%S'), msg)
+def log(msg, is_debug=False):
+    if is_debug and not DEBUG:
+        return
+
+    if is_debug:
+        msg = 'DEBUG {0}'.format(msg)
+
+    try:
+        print(datetime.now().astimezone().strftime('%Y-%m-%d %H:%M:%S'), msg)
+    except ValueError:
+        print(datetime.now().strftime('%Y-%m-%d %H:%M:%S'), msg)
 
 
 def convert_dict_keys_to_int(mydict):
@@ -90,6 +110,8 @@ def server_send(msg):
     if len(temp) < len(msg):
         msg = temp
     assert len(msg) < 4096
+    if TEST_LATENCY:
+        sleep(random.random() * 6)
     server_socket.send(msg)
 
 
@@ -99,6 +121,8 @@ def server_receive():
     if msg[0] == ord('!'):
         msg = gzip.decompress(msg[1:])
     msg = msg.decode('ascii').strip()
+    if TEST_LATENCY:
+        sleep(random.random() * 6)
     return msg
 
 
@@ -112,14 +136,20 @@ def get_retroarch_data(address, num_bytes):
     return data
 
 
+def fix_button_mapping():
+    DEFAULT_BUTTON_MAP = [0x12, 0x34, 0x56, 0x06]
+    default = ' '.join(['{0:0>2X}'.format(b) for b in DEFAULT_BUTTON_MAP])
+    cmd = 'WRITE_CORE_RAM {0:0>6x} {1}'.format(BUTTON_MAP_ADDRESS, default)
+    retroarch_socket.sendto(cmd.encode(), ('localhost', RETROARCH_PORT))
+
+
 def test_write_retroarch():
     DEFAULT_BUTTON_MAP = [0x12, 0x34, 0x56, 0x06]
-    REVISED_BUTTON_MAP = [0x06, 0x56, 0x34, 0x12]
-    default = ' '.join(['{0:0>2X}'.format(b) for b in DEFAULT_BUTTON_MAP])
+    REVISED_BUTTON_MAP = [0x12, 0x34, 0x56, 0xF6]
     revision = ' '.join(['{0:0>2X}'.format(b) for b in REVISED_BUTTON_MAP])
     data = get_retroarch_data(BUTTON_MAP_ADDRESS, 4)
     if data == DEFAULT_BUTTON_MAP and data != REVISED_BUTTON_MAP:
-        print('RetroArch read SUCCESS')
+        log('RetroArch read SUCCESS')
         cmd = 'WRITE_CORE_RAM {0:0>6x} {1}'.format(
             BUTTON_MAP_ADDRESS, revision)
         pause_retroarch()
@@ -128,15 +158,12 @@ def test_write_retroarch():
         toggle_pause_retroarch()
         data = get_retroarch_data(BUTTON_MAP_ADDRESS, 4)
         if data == REVISED_BUTTON_MAP and data != DEFAULT_BUTTON_MAP:
-            print('RetroArch write SUCCESS')
-            cmd = 'WRITE_CORE_RAM {0:0>6x} {1}'.format(
-                BUTTON_MAP_ADDRESS, default)
-            retroarch_socket.sendto(cmd.encode(), ('localhost',
-                                                   RETROARCH_PORT))
+            log('RetroArch write SUCCESS')
+            fix_button_mapping()
         else:
-            print('RetroArch write FAILURE')
+            log('RetroArch write FAILURE')
     else:
-        print('RetroArch read FAILURE')
+        log('RetroArch read FAILURE')
 
 
 def items_to_dict(items):
@@ -268,6 +295,8 @@ def write_inventory(order, to_inventory, raw_data, in_battle):
         new_raw = get_field_items_raw()
 
     if new_raw != raw_data:
+        log('Did not write inventory because of race condition (1).',
+            is_debug=True)
         return False
 
     pause_retroarch()
@@ -285,11 +314,18 @@ def write_inventory(order, to_inventory, raw_data, in_battle):
             if in_battle:
                 retroarch_socket.sendto(battle_cmd,
                                         ('localhost', RETROARCH_PORT))
+                log('Wrote battle inventory.', is_debug=True)
             retroarch_socket.sendto(field_cmd, ('localhost', RETROARCH_PORT))
+            log('Wrote field inventory.', is_debug=True)
+        else:
+            log('Did not write inventory because of configuration.',
+                is_debug=True)
 
         toggle_pause_retroarch()
         return True
     except:
+        log('Did not write inventory because of race condition (2).',
+            is_debug=True)
         toggle_pause_retroarch()
         return False
 
@@ -369,7 +405,8 @@ def write_chests(old_chests, new_chests):
     chests_cmd = 'WRITE_CORE_RAM {0:0>6x} {1}'.format(
         CHEST_ADDRESS, ' '.join(to_write)).encode()
 
-    retroarch_socket.sendto(chests_cmd, ('localhost', RETROARCH_PORT))
+    if SYNC_CHESTS:
+        retroarch_socket.sendto(chests_cmd, ('localhost', RETROARCH_PORT))
 
 
 def get_gp():
@@ -386,8 +423,11 @@ def get_server_directive():
     except:
         log('Bad directive: {0}'.format(response))
         raise Exception(response)
-    log('Received {0} from server.'.format(response))
-    #log('Received {0} from server.'.format(directive))
+
+    if DEBUG:
+        log('Received {0} from server.'.format(response), is_debug=True)
+    else:
+        log('Received {0} from server.'.format(directive))
     return directive, parameters
 
 
@@ -516,16 +556,17 @@ def main_loop():
         sync_field_battle(current_order, current_inventory)
 
     # update change queue
-    if (previous_inventory is not None
-            and played_time > previous_played_time
-            and current_inventory != previous_inventory):
-        for item in sorted(set(previous_inventory.keys())
-                           | set(current_inventory.keys())):
-            if previous_inventory[item] != current_inventory[item]:
-                message_index += 1
-                change_queue.append((
-                    message_index, item,
-                    current_inventory[item]-previous_inventory[item]))
+    if SYNC_INVENTORY:
+        if (previous_inventory is not None
+                and played_time > previous_played_time
+                and current_inventory != previous_inventory):
+            for item in sorted(set(previous_inventory.keys())
+                               | set(current_inventory.keys())):
+                if previous_inventory[item] != current_inventory[item]:
+                    message_index += 1
+                    change_queue.append((
+                        message_index, item,
+                        current_inventory[item]-previous_inventory[item]))
 
     # update change queue (statuses)
     if status_on is not None and status_off is not None:
@@ -601,7 +642,7 @@ def main_loop():
                         for (index, item, change) in change_queue
                         if isinstance(index, int)]
 
-    if chests_opened:
+    if SYNC_CHESTS and chests_opened:
         try:
             send_chests(current_chests)
             previous_chests = current_chests
@@ -609,6 +650,11 @@ def main_loop():
             log('Unable to connect to server.')
 
     if synced_inventory is not None:
+        if DEBUG:
+            simplified_inventory = {k:v for (k, v) in synced_inventory.items()
+                                    if v > 0}
+            log('Inventory write attempt: {0}'.format(simplified_inventory),
+                is_debug=True)
         try:
             if write_inventory(current_order, synced_inventory,
                                raw_data, in_battle=in_battle):
@@ -651,6 +697,15 @@ def send_sync_request():
 if __name__ == '__main__':
     try:
         test_write_retroarch()
+        fix_button_mapping()
+
+        for s in ['SYNC_INVENTORY', 'SYNC_CHESTS', 'SYNC_STATUS', 'SYNC_GP']:
+            log('{0}: {1}'.format(s, globals()[s]))
+
+        if DEBUG:
+            log('Debug mode enabled.', is_debug=True)
+        else:
+            log('Debug mode not enabled.')
 
         host, port, session_name = None, None, None
         if config.has_option('Settings', 'SERVER_HOSTNAME'):
