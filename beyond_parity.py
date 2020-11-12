@@ -163,7 +163,8 @@ def get_retroarch_data(address, num_bytes):
         raise IOError('RetroArch not responding.')
     data = [int(d, 0x10) for d in data.split(' ')[2:]]
     if len(data) != num_bytes:
-        raise IOError('RetroArch RAM data read error.')
+        raise IOError('RetroArch RAM data read error: {0}/{1} bytes'.format(
+            len(data), num_bytes))
     return data
 
 
@@ -494,6 +495,7 @@ def main_loop():
     global previous_inventory, previous_played_time
     global previous_status, previous_chests, previous_gp
     global backoff_sync_interval, previous_sync_request, force_sync
+    global retroarch_socket
 
     directive, directive_parameters = None, None
     try:
@@ -517,7 +519,10 @@ def main_loop():
         current_chests = get_chest_data()
     except (IOError, AssertionError):
         log('{0}: {1}'.format(*exc_info()[:2]))
+        retroarch_socket.close()
+        retroarch_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         retroarch_socket.connect(('localhost', RETROARCH_PORT))
+        retroarch_socket.settimeout(POLL_INTERVAL / 5.0)
         force_sync = True
         return
 
