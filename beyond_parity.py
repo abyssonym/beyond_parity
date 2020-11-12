@@ -61,6 +61,7 @@ except:
     exit(0)
 
 retroarch_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+retroarch_socket.connect(('localhost', RETROARCH_PORT))
 retroarch_socket.settimeout(POLL_INTERVAL / 5.0)
 server_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 server_socket.settimeout(POLL_INTERVAL)
@@ -142,9 +143,19 @@ def server_receive():
     return msg
 
 
+def write_retroarch_data(address, data):
+    MAX_WRITE_LENGTH = 4
+    while data:
+        s = ' '.join(['{0:0>2X}'.format(d) for d in data[:MAX_WRITE_LENGTH]])
+        cmd = 'WRITE_CORE_RAM {0:0>6x} {1}'.format(address, s)
+        retroarch_socket.send(cmd.encode())
+        data = data[MAX_WRITE_LENGTH:]
+        address += MAX_WRITE_LENGTH
+
+
 def get_retroarch_data(address, num_bytes):
     cmd = 'READ_CORE_RAM {0:0>6x} {1}'.format(address, num_bytes)
-    retroarch_socket.sendto(cmd.encode(), ('localhost', RETROARCH_PORT))
+    retroarch_socket.send(cmd.encode())
     expected_length = 21 + (3 * num_bytes)
     try:
         data = retroarch_socket.recv(expected_length).decode('ascii').strip()
@@ -158,22 +169,17 @@ def get_retroarch_data(address, num_bytes):
 
 def fix_button_mapping():
     DEFAULT_BUTTON_MAP = [0x12, 0x34, 0x56, 0x06]
-    default = ' '.join(['{0:0>2X}'.format(b) for b in DEFAULT_BUTTON_MAP])
-    cmd = 'WRITE_CORE_RAM {0:0>6x} {1}'.format(BUTTON_MAP_ADDRESS, default)
-    retroarch_socket.sendto(cmd.encode(), ('localhost', RETROARCH_PORT))
+    write_retroarch_data(BUTTON_MAP_ADDRESS, DEFAULT_BUTTON_MAP)
 
 
 def test_write_retroarch():
     DEFAULT_BUTTON_MAP = [0x12, 0x34, 0x56, 0x06]
     REVISED_BUTTON_MAP = [0x12, 0x34, 0x56, 0xF6]
-    revision = ' '.join(['{0:0>2X}'.format(b) for b in REVISED_BUTTON_MAP])
     data = get_retroarch_data(BUTTON_MAP_ADDRESS, 4)
     if data == DEFAULT_BUTTON_MAP and data != REVISED_BUTTON_MAP:
         log('RetroArch read SUCCESS')
-        cmd = 'WRITE_CORE_RAM {0:0>6x} {1}'.format(
-            BUTTON_MAP_ADDRESS, revision)
         pause_retroarch()
-        retroarch_socket.sendto(cmd.encode(), ('localhost', RETROARCH_PORT))
+        write_retroarch_data(BUTTON_MAP_ADDRESS, REVISED_BUTTON_MAP)
         sleep(0.05)
         toggle_pause_retroarch()
         data = get_retroarch_data(BUTTON_MAP_ADDRESS, 4)
@@ -249,11 +255,7 @@ def sync_field_battle(battle_order, battle_inventory):
             continue
         values.append(battle_inventory[v])
 
-    cmd = 'WRITE_CORE_RAM {0:0>6x}'.format(FIELD_ITEM_ADDRESS)
-    for v in values:
-        cmd = ' '.join([cmd, '{0:0>2X}'.format(v)])
-
-    retroarch_socket.sendto(cmd.encode(), ('localhost', RETROARCH_PORT))
+    write_retroarch_data(FIELD_ITEM_ADDRESS, values)
 
 
 def write_inventory(order, to_inventory, raw_data, in_battle):
@@ -284,27 +286,14 @@ def write_inventory(order, to_inventory, raw_data, in_battle):
     assert len(unique) == len(set(unique))
 
     if in_battle:
-        data = get_retroarch_data(BATTLE_ITEM_ADDRESS, 1280)
-        data[::5] = order
+        battle_data = get_retroarch_data(BATTLE_ITEM_ADDRESS, 1280)
+        battle_data[::5] = order
         amounts = []
         for item in order:
             amounts.append(inventory[item] if item < 0xFF else 0)
-        data[3::5] = amounts
-        battle_cmd = ' '.join(['{0:0>2X}'.format(d) for d in data])
-        battle_cmd = 'WRITE_CORE_RAM {0:0>6x} {1}'.format(
-            BATTLE_ITEM_ADDRESS, battle_cmd)
-        battle_cmd = battle_cmd.encode()
+        battle_data[3::5] = amounts
 
-    field_cmd = ' '.join(['{0:0>2X}'.format(item) for item in order])
-    for item in order:
-        if item == 0xFF:
-            field_cmd += ' 00'
-        else:
-            field_cmd += ' {0:0>2X}'.format(inventory[item])
-
-    field_cmd = 'WRITE_CORE_RAM {0:0>6x} {1}'.format(
-        FIELD_ITEM_ADDRESS, field_cmd)
-    field_cmd = field_cmd.encode()
+    field_data = order + [inventory[item] for item in order]
 
     # Here we perform multiple hacky checks to guarantee that memory has not
     # changed before we write to it, without interrupting the player
@@ -333,10 +322,9 @@ def write_inventory(order, to_inventory, raw_data, in_battle):
         success = False
         if SYNC_INVENTORY:
             if in_battle:
-                retroarch_socket.sendto(battle_cmd,
-                                        ('localhost', RETROARCH_PORT))
+                write_retroarch_data(BATTLE_ITEM_ADDRESS, battle_data)
                 log('Wrote battle inventory.', is_debug=True)
-            retroarch_socket.sendto(field_cmd, ('localhost', RETROARCH_PORT))
+            write_retroarch_data(FIELD_ITEM_ADDRESS, field_data)
             log('Wrote field inventory.', is_debug=True)
             success = True
             if DEBUG:
@@ -416,15 +404,8 @@ def write_status(char_statuses):
         status1 += [a & 0xFF, a >> 8]
         status2 += [b & 0xFF, b >> 8]
 
-    status1 = ['{0:0>2X}'.format(s) for s in status1]
-    status2 = ['{0:0>2X}'.format(s) for s in status2]
-    status1_cmd = 'WRITE_CORE_RAM {0:0>6x} {1}'.format(
-        STATUS_1_ADDRESS, ' '.join(status1)).encode()
-    status2_cmd = 'WRITE_CORE_RAM {0:0>6x} {1}'.format(
-        STATUS_2_ADDRESS, ' '.join(status2)).encode()
-    if SYNC_STATUS:
-        retroarch_socket.sendto(status1_cmd, ('localhost', RETROARCH_PORT))
-        retroarch_socket.sendto(status2_cmd, ('localhost', RETROARCH_PORT))
+    write_retroarch_data(STATUS_1_ADDRESS, status1)
+    write_retroarch_data(STATUS_2_ADDRESS, status2)
 
 
 def get_chest_data():
@@ -440,13 +421,9 @@ def write_chests(old_chests, new_chests):
         assert 0 <= b <= 0xFF
         to_write.append(a | b)
     assert len(to_write) == 0x40
-    to_write = ['{0:0>2X}'.format(c) for c in to_write]
-
-    chests_cmd = 'WRITE_CORE_RAM {0:0>6x} {1}'.format(
-        CHEST_ADDRESS, ' '.join(to_write)).encode()
 
     if SYNC_CHESTS:
-        retroarch_socket.sendto(chests_cmd, ('localhost', RETROARCH_PORT))
+        write_retroarch_data(CHEST_ADDRESS, to_write)
 
 
 def get_gp():
@@ -475,14 +452,14 @@ def pause_retroarch():
     if PAUSE_DELAY_INTERVAL <= 0:
         return
     cmd = b'FRAMEADVANCE'
-    retroarch_socket.sendto(cmd, ('localhost', RETROARCH_PORT))
+    retroarch_socket.send(cmd)
 
 
 def toggle_pause_retroarch():
     if PAUSE_DELAY_INTERVAL <= 0:
         return
     cmd = b'PAUSE_TOGGLE'
-    retroarch_socket.sendto(cmd, ('localhost', RETROARCH_PORT))
+    retroarch_socket.send(cmd)
 
 
 def send_change_queue():
@@ -516,7 +493,7 @@ def main_loop():
     global message_index, change_queue
     global previous_inventory, previous_played_time
     global previous_status, previous_chests, previous_gp
-    global backoff_sync_interval, previous_sync_request
+    global backoff_sync_interval, previous_sync_request, force_sync
 
     directive, directive_parameters = None, None
     try:
@@ -540,7 +517,7 @@ def main_loop():
         current_chests = get_chest_data()
     except (IOError, AssertionError):
         log('{0}: {1}'.format(*exc_info()[:2]))
-        previous_played_time = 999999999
+        force_sync = True
         return
 
     now = time()
@@ -698,28 +675,32 @@ def main_loop():
             log('Unable to connect to server.')
 
     if SYNC_INVENTORY and synced_inventory is not None:
-        if DEBUG:
-            simplified_inventory = {k:v for (k, v) in synced_inventory.items()
-                                    if v > 0}
-            simplified_current = {k:v for (k, v) in current_inventory.items()
-                                  if v > 0}
-            log('Inventory write attempt: {0}'.format(simplified_inventory),
+        simplified_inventory = {k:v for (k, v) in synced_inventory.items()
+                                if v > 0}
+        simplified_current = {k:v for (k, v) in current_inventory.items()
+                              if v > 0}
+        log('Inventory write attempt: {0}'.format(simplified_inventory),
+            is_debug=True)
+        if simplified_inventory == simplified_current:
+            log('The new inventory is THE SAME as the old inventory.',
                 is_debug=True)
-            if simplified_inventory == simplified_current:
-                log('The new inventory is THE SAME as the old inventory.',
-                    is_debug=True)
-            else:
-                log('The new inventory is DIFFERENT from the old inventory.',
-                    is_debug=True)
+            previous_inventory = current_inventory
+            if previous_played_time > played_time:
+                previous_played_time = played_time
 
-        try:
-            if write_inventory(current_order, synced_inventory,
-                               raw_data, in_battle=in_battle):
-                previous_inventory = synced_inventory
-                if previous_played_time > played_time:
-                    previous_played_time = played_time
-        except socket.timeout:
-            pass
+        else:
+            log('The new inventory is DIFFERENT from the old inventory.',
+                is_debug=True)
+            try:
+                if write_inventory(current_order, synced_inventory,
+                                   raw_data, in_battle=in_battle):
+                    previous_inventory = synced_inventory
+                    if previous_played_time > played_time:
+                        previous_played_time = played_time
+                else:
+                    force_sync = True
+            except socket.timeout:
+                pass
 
     if update_status_flag:
         write_status(synced_status)
@@ -742,11 +723,12 @@ def join_session(name):
 
 
 def send_sync_request():
-    global backoff_sync_interval
+    global backoff_sync_interval, force_sync
     backoff_sync_interval *= 1.5
     backoff_sync_interval = min(backoff_sync_interval, SYNC_INTERVAL * 10)
-    if previous_played_time >= 999999999:
+    if previous_played_time >= 999999999 or force_sync:
         server_send('SYNC {0} !'.format(SERIES_NUMBER))
+        force_sync = False
     else:
         server_send('SYNC {0}'.format(SERIES_NUMBER))
 
