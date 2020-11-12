@@ -5,7 +5,7 @@ import socket
 import traceback
 from configparser import ConfigParser
 from datetime import datetime, timezone
-from sys import argv
+from sys import argv, exc_info
 from time import time, sleep
 
 try:
@@ -74,11 +74,25 @@ previous_gp = None
 previous_sync_request = 0
 change_queue = []
 message_index = 0
+previous_log = None
+previous_log_time = 0
+previous_log_count = 0
 
 
 def log(msg, is_debug=False):
+    global previous_log, previous_log_count, previous_log_time
     if is_debug and not DEBUG:
         return
+
+    now = time()
+    time_diff = now - previous_log_time
+    if msg == previous_log:
+        previous_log_count += 1
+        if previous_log_count >= 3 and time_diff < 60:
+            return
+    else:
+        previous_log = msg
+        previous_log_count = 0
 
     if is_debug:
         msg = 'DEBUG {0}'.format(msg)
@@ -87,6 +101,8 @@ def log(msg, is_debug=False):
         print(datetime.now().astimezone().strftime('%Y-%m-%d %H:%M:%S'), msg)
     except ValueError:
         print(datetime.now().strftime('%Y-%m-%d %H:%M:%S'), msg)
+
+    previous_log_time = now
 
 
 def convert_dict_keys_to_int(mydict):
@@ -130,9 +146,13 @@ def get_retroarch_data(address, num_bytes):
     cmd = 'READ_CORE_RAM {0:0>6x} {1}'.format(address, num_bytes)
     retroarch_socket.sendto(cmd.encode(), ('localhost', RETROARCH_PORT))
     expected_length = 21 + (3 * num_bytes)
-    data = retroarch_socket.recv(expected_length).decode('ascii').strip()
+    try:
+        data = retroarch_socket.recv(expected_length).decode('ascii').strip()
+    except socket.timeout:
+        raise IOError('RetroArch not responding.')
     data = [int(d, 0x10) for d in data.split(' ')[2:]]
-    assert len(data) == num_bytes
+    if len(data) != num_bytes:
+        raise IOError('RetroArch RAM data read error.')
     return data
 
 
@@ -310,6 +330,7 @@ def write_inventory(order, to_inventory, raw_data, in_battle):
 
         assert new_raw == raw_data
 
+        success = False
         if SYNC_INVENTORY:
             if in_battle:
                 retroarch_socket.sendto(battle_cmd,
@@ -317,12 +338,31 @@ def write_inventory(order, to_inventory, raw_data, in_battle):
                 log('Wrote battle inventory.', is_debug=True)
             retroarch_socket.sendto(field_cmd, ('localhost', RETROARCH_PORT))
             log('Wrote field inventory.', is_debug=True)
+            success = True
+            if DEBUG:
+                verify_raw = get_field_items_raw()
+                verify_items = get_field_items(verify_raw)
+                _, verify_inventory = items_to_dict(verify_items)
+                if verify_inventory == inventory:
+                    log('The write was successful.', is_debug=True)
+                    success = True
+                else:
+                    log('ALERT: The write has failed!', is_debug=True)
+                    error_dict = {
+                        k: (inventory[k], verify_inventory[k])
+                        for k in range(0x100)
+                        if k in inventory and k in verify_inventory
+                        and inventory[k] != verify_inventory[k]
+                        }
+                    log(error_dict)
+                    success = False
         else:
             log('Did not write inventory because of configuration.',
                 is_debug=True)
+            success = False
 
         toggle_pause_retroarch()
-        return True
+        return success
     except:
         log('Did not write inventory because of race condition (2).',
             is_debug=True)
@@ -476,7 +516,7 @@ def main_loop():
     global message_index, change_queue
     global previous_inventory, previous_played_time
     global previous_status, previous_chests, previous_gp
-    global backoff_sync_interval
+    global backoff_sync_interval, previous_sync_request
 
     directive, directive_parameters = None, None
     try:
@@ -498,20 +538,28 @@ def main_loop():
         current_status = get_status_data()
 
         current_chests = get_chest_data()
-        chests_opened = False
-        if previous_chests is None:
-            previous_chests = current_chests
-        elif previous_chests != current_chests:
-            chests_opened = True
+    except (IOError, AssertionError):
+        log('{0}: {1}'.format(*exc_info()[:2]))
+        previous_played_time = 999999999
+        return
 
-        current_gp = get_gp()
-        if previous_gp is None:
-            previous_gp = current_gp
+    now = time()
+    if now - previous_sync_request > backoff_sync_interval:
+        send_sync_request()
+        previous_sync_request = now
 
-        field_items = get_field_items(field_raw)
-        battle_items = get_battle_items(battle_raw)
-    except socket.timeout:
-        raise Exception('RetroArch not responding.')
+    chests_opened = False
+    if previous_chests is None:
+        previous_chests = current_chests
+    elif previous_chests != current_chests:
+        chests_opened = True
+
+    current_gp = get_gp()
+    if previous_gp is None:
+        previous_gp = current_gp
+
+    field_items = get_field_items(field_raw)
+    battle_items = get_battle_items(battle_raw)
 
     # determine whether the game is currently in combat
     similarity = calculate_similarity(field_items, battle_items)
@@ -649,12 +697,21 @@ def main_loop():
         except ConnectionError:
             log('Unable to connect to server.')
 
-    if synced_inventory is not None:
+    if SYNC_INVENTORY and synced_inventory is not None:
         if DEBUG:
             simplified_inventory = {k:v for (k, v) in synced_inventory.items()
                                     if v > 0}
+            simplified_current = {k:v for (k, v) in current_inventory.items()
+                                  if v > 0}
             log('Inventory write attempt: {0}'.format(simplified_inventory),
                 is_debug=True)
+            if simplified_inventory == simplified_current:
+                log('The new inventory is THE SAME as the old inventory.',
+                    is_debug=True)
+            else:
+                log('The new inventory is DIFFERENT from the old inventory.',
+                    is_debug=True)
+
         try:
             if write_inventory(current_order, synced_inventory,
                                raw_data, in_battle=in_battle):
@@ -753,14 +810,9 @@ if __name__ == '__main__':
                 now = time()
             previous_network_time = now
 
-            if now - previous_sync_request > backoff_sync_interval:
-                send_sync_request()
-                previous_sync_request = now
-
             main_loop()
 
     except:
-        from sys import exc_info
         traceback.print_exc()
         print('Error:', exc_info()[0], exc_info()[1])
         input('')
